@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Neon Overdrive</title>
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:sans-serif;}
+canvas{display:block;}
+#ui{position:absolute;top:10px;left:10px;color:white;}
+#msg{position:absolute;width:100%;top:35%;text-align:center;color:white;font-size:22px;}
+
+#audioUI{
+  position:absolute;
+  bottom:10px;
+  left:10px;
+  color:white;
+}
+
+#leaderboard{
+  position:absolute;
+  top:10px;
+  right:10px;
+  color:white;
+  text-align:right;
+}
+button,input{margin-top:5px;}
+</style>
+</head>
+<body>
+
+<div id="ui">Score: 0</div>
+<div id="msg">Upload Music (optional) + Press SPACE</div>
+
+<div id="leaderboard"></div>
+
+<div id="audioUI">
+  <button onclick="toggleMusic()">Music: OFF</button><br>
+  <input type="file" id="fileInput" accept="audio/*">
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+let w,h;
+function resize(){
+  w=canvas.width=window.innerWidth;
+  h=canvas.height=window.innerHeight;
+}
+window.addEventListener("resize",resize);
+resize();
+
+// STATE
+let running=false, score=0;
+let speed=7, combo=1, hue=0;
+
+// POWERUPS
+let shield=false, slowTimer=0, burstTimer=0;
+
+// PLAYER
+const player={x:140,y:h/2,r:14,vy:0,gravity:0.6,jump:-11};
+
+let obstacles=[], powerups=[];
+let spacing=520;
+
+// 🎧 MUSIC SYSTEM
+let customAudio=null;
+let musicEnabled=false;
+
+const fileInput=document.getElementById("fileInput");
+const button=document.querySelector("#audioUI button");
+
+fileInput.addEventListener("change",()=>{
+  const file=fileInput.files[0];
+  if(file){
+    if(customAudio) customAudio.pause();
+
+    customAudio=new Audio(URL.createObjectURL(file));
+    customAudio.loop=true;
+    customAudio.volume=0.5;
+
+    if(musicEnabled){
+      customAudio.play();
+    }
+  }
+});
+
+function toggleMusic(){
+  musicEnabled=!musicEnabled;
+  button.textContent = "Music: " + (musicEnabled ? "ON" : "OFF");
+
+  if(!customAudio) return;
+
+  if(musicEnabled){
+    customAudio.play();
+  } else {
+    customAudio.pause();
+  }
+}
+
+// 🔊 SFX
+function sfx(freq,time,vol=0.04){
+  const ctxA=new (window.AudioContext||window.webkitAudioContext)();
+  const o=ctxA.createOscillator();
+  const g=ctxA.createGain();
+  o.frequency.value=freq;
+  g.gain.value=vol;
+  o.connect(g); g.connect(ctxA.destination);
+  o.start();
+  o.stop(ctxA.currentTime+time);
+}
+
+// 🏆 LEADERBOARD
+function getScores(){
+  return JSON.parse(localStorage.getItem("neonScores")||"[]");
+}
+
+function saveScore(s){
+  let scores=getScores();
+  scores.push(Math.floor(s));
+  scores.sort((a,b)=>b-a);
+  scores=scores.slice(0,5);
+  localStorage.setItem("neonScores",JSON.stringify(scores));
+}
+
+function drawLeaderboard(){
+  const scores=getScores();
+  document.getElementById("leaderboard").innerHTML=
+    "<b>TOP SCORES</b><br>"+scores.map((s,i)=>`${i+1}. ${s}`).join("<br>");
+}
+
+// INPUT
+function jump(){
+  if(!running){
+    reset();
+  } else {
+    player.vy=player.jump;
+    sfx(280,0.06);
+  }
+}
+
+window.addEventListener("keydown",e=>{if(e.code==="Space")jump();});
+window.addEventListener("touchstart",jump);
+
+// SPAWN
+function spawn(x){
+  const gap=260;
+  const shift=Math.sin(score/200)*120;
+  const center=h/2+shift;
+
+  const top=center-gap/2;
+
+  obstacles.push({x,width:60,top,bottom:top+gap,passed:false});
+
+  if(Math.random()<0.25){
+    powerups.push({
+      x:x+160,
+      y:center,
+      type:["shield","slow","burst"][Math.floor(Math.random()*3)]
+    });
+  }
+}
+
+// RESET
+function reset(){
+  obstacles=[];
+  powerups=[];
+  player.y=h/2;
+  player.vy=0;
+  score=0;
+  speed=7;
+  combo=1;
+
+  shield=false;
+  slowTimer=0;
+  burstTimer=0;
+
+  for(let i=0;i<6;i++){
+    spawn(w+i*spacing);
+  }
+
+  running=true;
+  document.getElementById("msg").textContent="";
+
+  if(musicEnabled && customAudio){
+    customAudio.currentTime=0;
+    customAudio.play();
+  }
+}
+
+// END
+function endGame(){
+  running=false;
+  saveScore(score);
+  drawLeaderboard();
+
+  sfx(100,0.3,0.1);
+  document.getElementById("msg").textContent="Game Over • TAP/SPACE";
+
+  if(customAudio) customAudio.pause();
+}
+
+// UPDATE
+function update(){
+  if(!running) return;
+
+  if(slowTimer>0) slowTimer--;
+  if(burstTimer>0) burstTimer--;
+
+  let currentSpeed=slowTimer>0?speed*0.5:speed;
+
+  player.vy+=player.gravity;
+  player.y+=player.vy;
+
+  if(player.y+player.r>h||player.y-player.r<0){
+    if(shield){
+      shield=false;
+      player.y=h/2;
+      player.vy=0;
+      sfx(200,0.2);
+    } else endGame();
+  }
+
+  let last=obstacles[obstacles.length-1];
+  if(last && last.x<w-spacing){
+    spawn(last.x+spacing);
+  }
+
+  for(let o of obstacles){
+    o.x-=currentSpeed;
+
+    if(!o.passed && o.x+o.width<player.x){
+      o.passed=true;
+
+      combo+=0.25;
+      let gain=Math.pow(1.8,combo)*10;
+      if(burstTimer>0) gain*=2;
+
+      score+=gain;
+
+      hue+=20;
+      sfx(700,0.02);
+
+      speed+=0.04;
+      if(speed>14) speed=14;
+    }
+
+    if(player.x+player.r>o.x && player.x-player.r<o.x+o.width){
+      if(player.y-player.r<o.top || player.y+player.r>o.bottom){
+        if(shield){
+          shield=false;
+          player.y=h/2;
+          player.vy=0;
+          sfx(200,0.2);
+        } else endGame();
+      }
+    }
+  }
+
+  for(let p of powerups){
+    p.x-=currentSpeed;
+
+    if(Math.hypot(player.x-p.x, player.y-p.y)<25){
+      if(p.type==="shield") shield=true;
+      if(p.type==="slow") slowTimer+=300;
+      if(p.type==="burst") burstTimer+=300;
+
+      sfx(250,0.12);
+      p.collected=true;
+    }
+  }
+
+  powerups=powerups.filter(p=>!p.collected && p.x>0);
+  obstacles=obstacles.filter(o=>o.x+o.width>0);
+
+  hue+=1.5;
+}
+
+// DRAW
+function draw(){
+  ctx.fillStyle=`hsla(${hue},60%,10%,0.25)`;
+  ctx.fillRect(0,0,w,h);
+
+  ctx.fillStyle=`hsl(${(hue+120)%360},90%,60%)`;
+  for(let o of obstacles){
+    ctx.fillRect(o.x,0,o.width,o.top);
+    ctx.fillRect(o.x,o.bottom,o.width,h-o.bottom);
+  }
+
+  for(let p of powerups){
+    ctx.fillStyle=
+      p.type==="shield"?"#0ff":
+      p.type==="slow"?"#ff0":"#f0f";
+
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,10,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  const g=ctx.createRadialGradient(player.x,player.y,2,player.x,player.y,30);
+
+  if(shield) g.addColorStop(1,"#0ff");
+  else if(burstTimer>0) g.addColorStop(1,"#f0f");
+  else if(slowTimer>0) g.addColorStop(1,"#ff0");
+  else g.addColorStop(1,"#00f0ff");
+
+  g.addColorStop(0,"#fff");
+
+  ctx.fillStyle=g;
+  ctx.beginPath();
+  ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
+  ctx.fill();
+
+  let status="";
+  if(shield) status+="🛡️ ";
+  if(slowTimer>0) status+="🐢 ";
+  if(burstTimer>0) status+="💥 ";
+
+  document.getElementById("ui").textContent=
+    `Score:${Math.floor(score)} Speed:${speed.toFixed(1)} ${status}`;
+}
+
+// LOOP
+function loop(){
+  requestAnimationFrame(loop);
+  update();
+  draw();
+}
+loop();
+
+drawLeaderboard();
+</script>
+</body>
+</html>
